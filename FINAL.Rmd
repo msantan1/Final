@@ -1,0 +1,338 @@
+---
+title: "FINAL EXAM"
+author: "Mario Santana"
+date: "March 15, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+
+When approaching the final, at first I thought it would be best to run regressions in order to build the relationship but the more I ran the regressions the more it seemed like the relationships where, for the most part, weak. They weak in the sense that, even though the coefficients were statistically significant, the coefficients were very small and did not impact the variable of interest. So I decided to take the approach of using bar graphs since most variables of interest were not ideal for regression. 
+
+```{r package-load, include=F, message=FALSE}
+library("dplyr") 
+library("DBI")
+library("RSQLite")
+library("nycflights13")
+library("plyr")
+library("ggplot2")
+```
+
+```{r data-merge, include=FALSE}
+MY_DB <- src_sqlite("MY_DB_sqlite", create = T)
+
+flights_sqlite <- copy_to(
+  MY_DB, flights, temporary = FALSE, 
+  indexes = list(
+    c("year", "month", "day"), 
+    "carrier", 
+    "tailnum")
+)
+
+flights = tbl(MY_DB, "flights") %>% 
+  collect() %>%
+  mutate(canceled = is.na(arr_time))
+
+airlines_sqlite <- copy_to(
+  MY_DB, airlines, temporary = FALSE, 
+  indexes = list("carrier")
+)
+
+airports_sqlite <- copy_to(
+  MY_DB, airports, temporary = FALSE, 
+  indexes = list("faa")
+)
+
+planes_sqlite <- copy_to(
+  MY_DB, planes, temporary = FALSE, 
+  indexes = list("tailnum")
+)
+
+weather_sqlite <- copy_to(
+  MY_DB, weather, temporary = FALSE, 
+  indexes = list(
+    c("year", "month","day","hour"),
+    "origin")
+)
+
+flights_weather <- as.data.frame(tbl(MY_DB, 
+            sql("SELECT * FROM flights JOIN weather 
+                ON flights.year = weather.year 
+                AND flights.month = weather.month 
+                AND flights.day = weather.day
+                AND flights.hour = weather.hour")
+            )) %>% 
+  compute( , name = "flights_weather")
+
+flights_airport <- as.data.frame(tbl(MY_DB,sql("SELECT * FROM flights JOIN airports 
+                           ON flights.dest = airports.faa")
+)) %>% 
+  compute( , name = "flights_airport")
+
+flights_planes <- as.data.frame(tbl(MY_DB,sql("SELECT * FROM flights JOIN planes 
+                           ON flights.tailnum = planes.tailnum")
+)) %>% 
+  compute( , name = "flights_planes")
+
+```
+
+
+###Part a)  
+#### Relationship between Departure Delays and Weather
+
+```{r reg_flights.weather, include=FALSE}
+reg_flights.weather <- lm(flights_weather$dep_delay ~ flights_weather$visib + 
+                            flights_weather$precip + flights_weather$pressure +
+                            flights_weather$wind_speed + flights_weather$wind_dir +
+                            flights_weather$humid + flights_weather$dewp + 
+                            flights_weather$temp)
+```
+
+
+```{r}
+summary(reg_flights.weather)
+```
+From these results we can see that variables that seem to have an effect on departure delays are visibility and precipitation. All the other variables, even though they are statistically sinificant, dont effect departure delays much. 
+
+
+
+Regressing departure delays on visibility will give us a better understanding on the relationship between delays and visibility
+```{r, message=FALSE}
+summary(lm(dep_delay ~ visib, data = flights_weather))
+```
+
+```{r DD_VIS_PLOT, include=FALSE}
+pDD_VIS <- ggplot(
+  data = flights_weather, 
+  aes(x = visib, y = dep_delay)) +
+  geom_point() +
+  geom_abline(intercept = 25, slope = -1.788) + 
+  xlim(0, 10) + ylim(-43, 600)
+```
+
+```{r, echo=FALSE, warning=FALSE}
+pDD_VIS
+```
+
+This shows that the relationship between visibility and departure delays is negative. It is statistically significant as well. Therefore, when visibility increases by one unit departure delay decreases by about 2 units. 
+
+
+Now Regressing departure delays on precipitation will give us a better understanding on the relationship between departure delays and precipitation
+```{r}
+summary(lm(dep_delay ~ precip, data = flights_weather))
+```
+
+```{r DD_PREC_PLOT, include=FALSE}
+pDD_PRIPC <- ggplot(
+  data = flights_weather, 
+  aes(x = precip, y = dep_delay)) +
+  geom_point() +
+  geom_abline(intercept = 9, slope = 12.5) + 
+  xlim(0, 0.35) + ylim(-43, 400)
+```
+
+```{r, echo=FALSE, warning=FALSE}
+pDD_PRIPC
+```
+
+This shows that the relationship between precipitation and departure delays is positive. It is also statistically significant. Therefore, when precipitation increases by one unit departure delay increases by about 12 units. Precipitation has a stronger effect on departure delay than visibility does. 
+
+
+#### Relationship between Cacelations and Weather
+
+```{r , include=FALSE }
+flights_weather = as.data.frame(flights_weather) %>% 
+  collect() %>%
+  mutate(canceled = is.na(arr_time))
+```
+
+```{r, include=F}
+mean_canceled_visibility <- ddply(flights_weather, "visib", summarise, mcv = mean(canceled, na.rm = T))
+```
+
+```{r}
+ggplot(mean_canceled_visibility, aes(visib, y = mcv)) + geom_bar(stat = "identity")
+```
+
+This graph shows that when there is low visibility the number of cancelations on average increases. 
+
+###Part b)  
+#### Relationship between Departure Delays and Time
+```{r, include=FALSE}
+flights = as.data.frame(flights) %>% 
+  collect() %>%
+  mutate(canceled = is.na(arr_time))
+```
+
+```{r, include=F}
+mean_delay_month <- ddply(flights, "month", summarise, mdd = mean(dep_delay, na.rm = T))
+mean_delay_month <- mean_delay_month[order(-mean_delay_month$mdd),]
+```
+The top 6 months with highes average delay departure are:
+```{r, echo=F}
+head(mean_delay_month)
+```
+
+```{r, echo=F}
+ggplot(mean_delay_month, aes(month, y = mdd)) + geom_bar(stat = "identity")
+```
+
+```{r, include=F}
+flights$pass_noon <- ifelse(flights$dep_time > 1200, 1, 0)
+mean_delay_time <- ddply(flights, "pass_noon", summarise, mpn = mean(dep_delay, na.rm = T))
+```
+
+Which time of the day has more delay departures? Before noon or after noon?
+
+```{r, echo=F, warning=F}
+ggplot(mean_delay_time, aes(pass_noon, y = mpn)) + geom_bar(stat = "identity")
+```
+
+As we can see from the graph above, there are a subtantial larger amount of flights with delay departures after noon. This makes sense, since delaying departure early in the day will mean that its next departure will be more likely to be delayed. 
+
+#### Relationship between Cacelations and Weather
+
+```{r, include=F}
+sum_canceled_month <- ddply(flights, "month", summarise, mcd = sum(canceled, na.rm = T))
+sum_canceled_month <- sum_canceled_month[order(-sum_canceled_month$mcd),]
+```
+
+```{r, echo=F}
+head(sum_canceled_month)
+```
+There is not a big difference between each month and the number of cancelations. But the month with the highest number of cancelations is February.
+```{r, echo=F, warning=F}
+ggplot(sum_canceled_month, aes(month, y = mcd)) + geom_bar(stat = "identity")
+```
+
+```{r, include=F}
+sum_canceled_time <- ddply(flights, "pass_noon", summarise, mcpn = sum(canceled, na.rm = T))
+```
+Similarly to departure delays, there are more cancelations past noon. 
+```{r, echo=F, warning=F}
+ggplot(sum_canceled_time, aes(pass_noon, y = mcpn)) + geom_bar(stat = "identity")
+```
+
+
+###Part c)  
+#### Relationship between Departure Delays and Airport
+```{r, include=F}
+flights_airport = as.data.frame(flights_airport) %>% 
+  collect() %>%
+  mutate(canceled = is.na(arr_time))
+```
+
+```{r, include=F}
+mean_delay_airport <- ddply(flights_airport, "name", summarise, mda = mean(dep_delay, na.rm = T))
+mean_delay_airport <- mean_delay_airport[order(-mean_delay_airport$mda),]
+```
+
+```{r, echo=F}
+head(mean_delay_airport)
+```
+
+```{r, echo=F, warning=F}
+ggplot(mean_delay_airport, aes(name, y = mda)) + geom_bar(stat = "identity")
+```
+
+This graph shows how the average departure delay is distributed within the destination airports. South Bend Reginal is the airport with the highest departure delay. 
+
+
+#### Relationship between Cacelations and Airports
+
+```{r, include=F}
+mean_canceled_airport <- ddply(flights_airport, "name", summarise, mca = sum(canceled, na.rm = T))
+mean_canceled_airport <- mean_canceled_airport[order(-mean_canceled_airport$mca),]
+```
+
+We can see that the airport with the highest number of cancelations is Ronald Reagan Washington. 
+```{r, echo=F, warning=F}
+head(mean_canceled_airport)
+```
+
+###Part d)  
+#### Relationship between Departure Delays and Plane Characteristics
+```{r, include=F}
+flights_planes = as.data.frame(flights_planes) %>% 
+  collect() %>%
+  mutate(canceled = is.na(arr_time))
+```
+
+```{r, include=F}
+mean_delay_planes1 <- ddply(flights_planes, "model", summarise, mdp = mean(dep_delay, na.rm = T))
+mean_delay_planes1 <- mean_delay_planes1[order(-mean_delay_planes1$mdp),]
+```
+
+```{r, echo=F}
+head(mean_delay_planes1)
+```
+
+```{r, echo=F, warning=F}
+ggplot(mean_delay_planes1, aes(model, y = mdp)) + geom_bar(stat = "identity")
+```
+
+These results show how evenly spread the departure delay is with the model of the plane. It also shows how there are a few models that are extremely high in departure delays, model G-IV, and others that have negative departure delays. Other than those few departure delay seems to be evenly distributed. 
+
+```{r, include=F}
+mean_delay_planes2 <- ddply(flights_planes, "engines", summarise, mdp = mean(dep_delay, na.rm = T))
+mean_delay_planes2 <- mean_delay_planes2[order(-mean_delay_planes2$mdp),]
+```
+
+```{r, echo=F}
+head(mean_delay_planes2)
+```
+
+```{r, echo=F}
+ggplot(mean_delay_planes2, aes(engines, y = mdp)) + geom_bar(stat = "identity")
+```
+
+The number of engines in the plane doesn't seem to matter for predicting departure delays. 
+
+```{r, include=F}
+mean_delay_planes3 <- ddply(flights_planes, "seats", summarise, mdp = mean(dep_delay, na.rm = T))
+mean_delay_planes3 <- mean_delay_planes3[order(-mean_delay_planes3$mdp),]
+```
+
+```{r, echo=F}
+head(mean_delay_planes3)
+```
+
+```{r, echo=F}
+ggplot(mean_delay_planes3, aes(seats, y = mdp)) + geom_bar(stat = "identity")
+```
+
+Seats has a similar trait to model. It looks like the airplane model G-IV has 22 seats. 
+
+#### Relationship between Cancelations and Plane Characteristics
+
+```{r, include=F}
+mean_canceled_planes1 <- ddply(flights_planes, "model", summarise, mcp = mean(canceled, na.rm = T))
+mean_canceled_planes1 <- mean_canceled_planes1[order(-mean_canceled_planes1$mcp),]
+```
+
+```{r, echo=F}
+head(mean_canceled_planes1)
+```
+
+The models with the highest number of flights that were cancelations on average in the EMB-145LR. 
+```{r, echo=F, warning=F}
+ggplot(mean_canceled_planes1, aes(model, y = mcp)) + geom_bar(stat = "identity")
+
+```
+
+```{r, include=F}
+mean_canceled_planes4 <- ddply(flights_planes, "manufacturer", summarise, mcp = mean(canceled, na.rm = T))
+mean_canceled_planes4 <- mean_canceled_planes4[order(-mean_canceled_planes4$mcp),]
+```
+
+```{r, echo=F}
+head(mean_canceled_planes4)
+```
+
+```{r, echo=F, warning=F}
+ggplot(mean_canceled_planes4, aes(manufacturer, y = mcp)) + geom_bar(stat = "identity")
+```
